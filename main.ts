@@ -6,15 +6,23 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse";
 import { z } from "zod";
 import Groq from "groq-sdk";
+import { randomUUID } from "crypto";
 
 // Initialize Groq with Helicone proxy headers
+const sessionId = randomUUID();
+const sessionName = "Sentiment Session";
+
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY || "",
   baseURL: "https://groq.helicone.ai",
   defaultHeaders: {
     "Helicone-Auth": `Bearer ${process.env.HELICONE_API_KEY || ""}`,
+    "Helicone-Session-Id": sessionId,
+    "Helicone-Session-Name": sessionName,
+    "Helicone-Session-Path": `/analysis/${Date.now()}`,
   },
 });
+
 
 // Initialize MCP Server
 const server = new McpServer({
@@ -38,17 +46,26 @@ server.tool(
       }
 
       // Send prompt to Groq via Helicone
-      const completion = await groq.chat.completions.create({
-        messages: [
-          {
-            role: "user",
-            content: `Analyze the sentiment of the following text and respond in JSON format with fields for "sentiment" (positive/neutral/negative), "confidence" (0-1), and "explanation". Text: "${sanitizedText}"`,
+      const completion = await groq.chat.completions.create(
+        {
+          messages: [
+            {
+              role: "user",
+              content: `Analyze the sentiment of the following text and respond in JSON format with fields for "sentiment" (positive/neutral/negative), "confidence" (0-1), and "explanation". Text: "${sanitizedText}"`,
+            },
+          ],
+          model: "meta-llama/llama-4-scout-17b-16e-instruct",
+          temperature: 0.4,
+          max_tokens: 1000,
+        },
+        {
+          headers: {
+            "Helicone-Session-Id": sessionId,
+            "Helicone-Session-Name": sessionName,
+            "Helicone-Session-Path": `/analysis/${Date.now()}`, // unique per request
           },
-        ],
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
-        temperature: 0.4,
-        max_tokens: 1000,
-      });
+        }
+      );
 
       const responseText = completion.choices?.[0]?.message?.content || "";
 
@@ -92,7 +109,6 @@ app.get("/sse", (req, res) => {
   transport = new SSEServerTransport("/messages", res);
   server.connect(transport);
 });
-
 
 app.post("/messages", (req, res) => {
   if (transport && typeof transport.handlePostMessage === "function") {
